@@ -27,6 +27,4 @@ dist-ssr
 # Local
 local
 *.backup
-example-*.*
-
-.env
+*.env
