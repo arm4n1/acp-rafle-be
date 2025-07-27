@@ -3,6 +3,8 @@ import * as Yup from "yup";
 
 import UserModel from "../models/user.model";
 import { encrypt } from "../utils/encryption";
+import { generateToken } from "../utils/jwt";
+import { IReqUser } from "../middlewares/auth.middleware";
 
 type TRegister = {
   fullName: string;
@@ -18,20 +20,13 @@ type TLogin = {
 };
 
 const registerValidateSchema = Yup.object({
-  fullName: Yup.string().required("Full name is required"),
-  username: Yup.string()
-    .required("Username is required")
-    .min(3, "Username must be at least 3 characters")
-    .matches(/^[a-zA-Z0-9_]+$/, "Username can only contain letters, numbers, and underscores"),
-  email: Yup.string()
-    .required("Email is required")
-    .email("Please enter a valid email address"),
-  password: Yup.string()
-    .required("Password is required")
-    .min(6, "Password must be at least 6 characters"),
+  fullName: Yup.string().required(),
+  username: Yup.string().required(),
+  email: Yup.string().email().required(),
+  password: Yup.string().required(),
   confirmPassword: Yup.string()
-    .required("Confirm password is required")
-    .oneOf([Yup.ref('password')], "Passwords must match"),
+    .required()
+    .oneOf([Yup.ref("password"), ""], "Password not match"),
 });
 
 export default {
@@ -40,7 +35,6 @@ export default {
       req.body as unknown as TRegister;
 
     try {
-      // Validasi input dengan Yup
       await registerValidateSchema.validate({
         fullName,
         username,
@@ -49,46 +43,16 @@ export default {
         confirmPassword,
       });
 
-      // Cek apakah username sudah ada
-      const existingUsername = await UserModel.findOne({ username });
-      if (existingUsername) {
-        return res.status(400).json({
-          message: "Username already exists. Please choose a different username.",
-          data: null,
-        });
-      }
-
-      // Cek apakah email sudah ada
-      const existingEmail = await UserModel.findOne({ email });
-      if (existingEmail) {
-        return res.status(400).json({
-          message: "Email already exists. Please use a different email address.",
-          data: null,
-        });
-      }
-
-      // Enkripsi password sebelum menyimpan
-      const hashedPassword = encrypt(password);
-
-      // Buat user baru
       const result = await UserModel.create({
         fullName,
         email,
         username,
-        password: hashedPassword,
+        password,
       });
 
-      // Hapus password dari response untuk keamanan
-      const userResponse = {
-        _id: result._id,
-        fullName: result.fullName,
-        username: result.username,
-        email: result.email,
-      };
-
-      res.status(201).json({
-        message: "Registration successful",
-        data: userResponse,
+      res.status(200).json({
+        message: "Success registration!",
+        data: result,
       });
     } catch (error) {
       const err = error as unknown as Error;
@@ -98,63 +62,71 @@ export default {
       });
     }
   },
-
   async login(req: Request, res: Response) {
     const { identifier, password } = req.body as unknown as TLogin;
-    
     try {
-      // Validasi input dasar
-      if (!identifier || !password) {
-        return res.status(400).json({
-          message: "Identifier and password are required",
-          data: null,
-        });
-      }
+      // ambil data user berdasarkan "identifier" -> email dan username
 
-      // Ambil data user berdasarkan "identifier" -> email atau username
       const userByIdentifier = await UserModel.findOne({
         $or: [
-          { email: identifier },
-          { username: identifier },
+          {
+            email: identifier,
+          },
+          {
+            username: identifier,
+          },
         ],
       });
 
       if (!userByIdentifier) {
-        return res.status(401).json({
-          message: "Invalid credentials",
+        return res.status(403).json({
+          message: "user not found",
           data: null,
         });
       }
 
-      // Validasi password
+      // validasi password
       const validatePassword: boolean =
         encrypt(password) === userByIdentifier.password;
 
       if (!validatePassword) {
-        return res.status(401).json({
-          message: "Invalid credentials",
+        return res.status(403).json({
+          message: "user not found",
           data: null,
         });
       }
 
-      // Hapus password dari response untuk keamanan
-      const userResponse = {
-        _id: userByIdentifier._id,
-        fullName: userByIdentifier.fullName,
-        username: userByIdentifier.username,
-        email: userByIdentifier.email
-        
-      };
+      const token = generateToken({
+        id: userByIdentifier._id,
+        role: userByIdentifier.role,
+      });
 
       res.status(200).json({
-        message: "Login successful",
-        data: userResponse,
+        message: "Login success",
+        data: token,
       });
-      
     } catch (error) {
       const err = error as unknown as Error;
-      res.status(500).json({
-        message: "Internal server error",
+      res.status(400).json({
+        message: err.message,
+        data: null,
+      });
+    }
+  },
+  async me(req: IReqUser, res: Response) {
+    try {
+      const userData = req.user;
+
+      const result = await UserModel.findById(userData?.id);
+
+      res.status(200).json({
+        message: "Success get user profile",
+        data: result,
+      });
+    } catch (error) {
+      const err = error as unknown as Error;
+      res.status(400).json({
+        message: err.message,
         data: null,
       });
     }
